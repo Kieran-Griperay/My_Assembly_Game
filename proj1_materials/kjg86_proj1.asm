@@ -1,5 +1,5 @@
-# YOUR FULL NAME HERE
-# YOUR PITT USERNAME HERE
+# Kieran Griperay
+# kjg86@pitt.edu
 
 # This is used in a few places to make grading your project easier.
 .eqv GRADER_MODE 0
@@ -57,6 +57,7 @@ object_dir:    .word 0:NUM_OBJECTS # direction object is facing
 .include "levels.asm"
 .include "obj.asm"
 .include "collide.asm"
+
 
 # ------------------------------------------------------------------------------------------------
 
@@ -137,7 +138,7 @@ leave
 
 # ------------------------------------------------------------------------------------------------
 
-# updates all the parts of the game.
+# updates all the parts of the game.dsa
 update_all:
 enter
 	jal obj_update_all
@@ -149,16 +150,29 @@ leave
 
 # updates all timer variables (well... there's just one)
 update_timers:
-enter
-
-leave
+enter s0
+	lw s0, player_move_timer
+	ble s0, 0, _break
+	sub s0, s0, 1
+	sw s0, player_move_timer
+	_break:
+	
+	
+leave s0
 
 # ------------------------------------------------------------------------------------------------
 
 # positions camera based on player position.
 update_camera:
 enter
-
+	li a0, 0
+	jal obj_get_topleft_pixel_coords
+	add v0 v0 CAMERA_OFFSET_X
+	add v1 v1 CAMERA_OFFSET_Y
+	move a0, v0
+	move a1, v1
+	jal tilemap_set_scroll
+	
 leave
 
 # ------------------------------------------------------------------------------------------------
@@ -168,18 +182,285 @@ leave
 # a0 = object index (but you can just access the player_ variables directly)
 obj_update_player:
 enter
-
+	lw t0, player_moving
+	bne t0, 0, _skip_place_input
+	
+	jal player_check_goal
+	jal player_check_vines
+	
+	bne v0, 0, _leave
+	
+	jal player_check_place_input
+	jal player_check_move_input
+	j _breakkk
+	
+_skip_place_input:
+	li a0, 0
+	jal obj_move
+	
+	
+_leave:
+_breakkk:
+	jal player_check_dig_input
 leave
 
+# ------------------------------------------------------------------------------------------------
+player_check_goal:
+enter s0 s1
+	li a0, 0
+	jal obj_get_tile_coords
+	move a0, v0
+	move a1, v1
+	
+	jal tilemap_get_tile
+	move t0, v0
+	bne t0, TILE_GOAL, _stahp
+	lw s0, bugs_saved
+	lw s1, bugs_to_save
+	bne s0, s1, _stahp
+	
+	li t0, 1
+	sw t0, game_over
+	_stahp:
+leave s0 s1
+# ------------------------------------------------------------------------------------------------
+player_check_vines:
+enter s0
+	li a0, 0
+	jal obj_get_tile_coords
+	move a0, v0
+	move a1, v1
+	
+	jal tilemap_get_tile
+	move t0, v0
+	
+	bne t0, TILE_VINES, _no_vine
+	move a0, zero
+	li a1, PLAYER_MOVE_VELOCITY
+	li a2, PLAYER_MOVE_DURATION
+	jal obj_start_moving_backward
+	_no_vine:
+	li v0, 0
+
+leave s0
+# ------------------------------------------------------------------------------------------------
+player_check_place_input:
+enter s0
+	#key check
+	jal input_get_keys_pressed
+	and s0, v0, KEY_Z
+	beq s0, 0, _end
+	#performs or to check grade_mode and player dirt
+	li t0, GRADER_MODE
+	lw t1, player_dirt
+	or t0, t0, t1
+	beq t0, 0, _end
+	#this checks the tile infront
+	
+	li a0, 0
+	jal obj_get_tile_coords_in_front
+	move a0, v0
+	move a1, v1
+	
+	jal tilemap_get_tile
+	bne v0, TILE_EMPTY, _end
+	
+	#check if object
+	li a0, 0
+	li a1, TILE_SIZE
+	jal obj_get_pixel_coords_in_front
+	
+	move a0, v0
+	move a1, v1
+	
+	jal obj_find_at_position
+	bne v0, -1, _end
+	
+	li a0, 0
+	#li a1, TILE_SIZE
+	jal obj_get_tile_coords_in_front
+	
+	move a0, v0
+	move a1, v1
+	li a2, TILE_DIRT
+	jal tilemap_set_tile
+	
+	lw t0, player_dirt
+	sub t0, t0, 1
+	sw t0, player_dirt
+	
+	_end:
+leave s0
+# ------------------------------------------------------------------------------------------------
+player_check_move_input:
+enter s0
+	jal input_get_keys_held
+	move s0, v0
+	
+	and t0, s0, KEY_U
+	beq t0, 0, _endIFU
+	li a0, DIR_N
+	jal player_try_move
+	
+_endIFU:
+	and t0, s0, KEY_D
+	beq t0, 0, _endIFS
+	li a0, DIR_S
+	jal player_try_move
+_endIFS:
+	and t0, s0, KEY_L
+	beq t0, 0, _endIFW
+	li a0, DIR_W
+	jal player_try_move
+_endIFW:
+	and t0, s0, KEY_R
+	beq t0, 0, _endIFE
+	li a0, DIR_E
+	jal player_try_move
+_endIFE:
+
+leave s0
+# ------------------------------------------------------------------------------------------------
+player_try_move:
+
+enter s0 s1
+	lw s0 player_dir
+	
+	beq s0, a0, _skip
+	move s1, a0
+	
+	sw a0, player_dir
+	
+	li s0, PLAYER_MOVE_DELAY
+	sw s0, player_move_timer
+	
+	_skip:
+	
+	lw s0, player_move_timer
+	bne s0, 0, _ignore
+	
+	li s0, PLAYER_MOVE_DELAY
+	move s1, s0
+	sw s1, player_move_timer
+	
+	li a0, 0
+	lw a1, player_dir
+	jal obj_collision_check
+	
+	beq v0, COLLISION_TILE, _cTile
+	beq v0, COLLISION_OBJ, _object
+	j _default
+	_cTile:
+		li v0 COLLISION_TILE
+		j _ignore
+	_object:
+		#li v0 COLLISION_OBJ
+		move a0, v1
+		jal player_try_push_object
+		beq v0, 0, _ignore
+		
+	#come back to
+	_default:
+	move a0, zero
+	li a1, PLAYER_MOVE_VELOCITY
+	li a2, PLAYER_MOVE_DURATION
+	jal obj_start_moving_forward
+	
+	_ignore:
+leave s0 s1
+# ------------------------------------------------------------------------------------------------
+player_try_push_object:
+enter s0 s1
+	move t0, a0
+	move s1, a0
+	
+	lw s0, player_dir
+	
+	beq s0, DIR_E, _continue
+	beq s0, DIR_W, _continue
+	
+	j _return_no
+	_continue:
+	move a0, t0
+	lw s0, object_moving(s1)
+	bne s0, 0, _return_no
+	#check for obstruction
+	move a0, t0
+	lw a1, player_dir
+	jal obj_collision_check
+	beq v0, COLLISION_NONE, _push
+	beq v0, COLLISION_TILE, _return_no
+	beq v0, COLLISION_OBJ, _return_no
+	
+	j _dip
+	_push:
+		move a0, s1
+		lw a1, player_dir
+		jal obj_push
+		
+	_return_yes:
+		li v0, 1
+		j _dip
+	_return_no:
+		li v0, 0
+	_dip:
+leave s0 s1
+# ------------------------------------------------------------------------------------------------
+player_check_dig_input:
+enter s0
+	jal input_get_keys_pressed
+	and s0, v0, KEY_X
+	beq s0, 0, _endAnd
+	
+	li a0 0
+	jal obj_get_tile_coords_in_front
+	move a0, v0
+	move a1, v1
+	
+	jal tilemap_get_tile
+	
+	bne v0, TILE_DIRT, _endAnd
+	
+	li a0, 0
+	jal obj_get_tile_coords_in_front
+	move a0, v0
+	move a1, v1
+	
+	li a2, TILE_EMPTY
+	jal tilemap_set_tile
+	
+	lw s0, player_dirt
+	beq s0, PLAYER_MAX_DIRT, _skip_dirt
+	add s0, s0 1
+	
+	_skip_dirt:
+	sw s0, player_dirt
+	
+	_endAnd:
+leave s0
 # ------------------------------------------------------------------------------------------------
 # Diamond object
 # ------------------------------------------------------------------------------------------------
 
 # a0 = object index
 obj_update_diamond:
-enter
-
-leave
+enter s0
+	move s0, a0 #diamond obj
+	jal obj_move_or_check_for_falling #check to see if it should fall
+	
+	move a0, s0
+	jal obj_collides_with_player #check collision
+	bne v0, 1, _leave_diamond
+	
+	lw t0, player_diamonds
+	add t0, t0, 1
+	sw t0, player_diamonds
+	
+	move a0, s0
+	jal obj_free
+	
+	_leave_diamond:
+leave s0
 
 # ------------------------------------------------------------------------------------------------
 # Boulder object
@@ -188,7 +469,7 @@ leave
 # a0 = object index
 obj_update_boulder:
 enter
-
+	jal obj_move_or_check_for_falling
 leave
 
 # ------------------------------------------------------------------------------------------------
@@ -197,10 +478,126 @@ leave
 
 # a0 = object index
 obj_update_bug:
+enter s0 s1 s2
+	move s2, a0
+	
+	lw t0, object_moving(s2)
+	beq t0, 0, _object_not_moving
+		jal obj_move
+		j _aight_imma_head_out
+	
+	_object_not_moving:
+	#else part
+	#check for goal tile
+	move a0, s2
+	jal obj_get_tile_coords
+	move a0, v0
+	move a1, v1
+	jal tilemap_get_tile
+	
+	bne v0, TILE_GOAL, _bug_not_on_goal #if bug is on goal
+	move a0, s2
+	lw s0, bugs_saved #runs if the bug is on the goal
+
+	add s0, s0, 1
+	sw s0, bugs_saved
+	move a0, s2
+	jal obj_free
+	
+_bug_not_on_goal:
+	#chekc for vine
+	move a0, s2
+	jal obj_get_tile_coords
+	move a0, v0
+	move a1, v1
+	jal tilemap_get_tile
+	
+	beq v0, TILE_VINES, _vines
+	j _move_sequence
+	_vines:
+	
+	move a0, s2
+	jal obj_get_tile_coords
+	move a0, v0
+	move a1, v1
+	li a2, TILE_EMPTY
+	jal tilemap_set_tile
+	
+	_move_sequence:
+	#begin move sequence
+	#check infront 
+	move a0, s2
+	jal check_front
+	move s1, v0
+	
+	#j _move_it
+		
+		#check for brick on left of bug
+		lw a1, object_dir(s2)
+		move a0, s2
+		add a1, a1, 3
+		rem a1, a1, 4
+		jal obj_collision_check
+		beq v0, COLLISION_NONE, _turn_left
+		beq v0, COLLISION_TILE, _turn_right
+		beq v0, COLLISION_OBJ, _turn_right
+		
+		_turn_right:
+			move a0, s2
+			bne s1, 1, _move_it
+			lw t0, object_dir(s2) #this rotates bug right
+			add t0, t0, 1
+			rem t0, t0, 4
+			sw t0, object_dir(s2)
+			
+			jal obj_draw_bug
+			j _aight_imma_head_out
+			
+			_move_it:
+			move a0, s2
+			jal buggy
+			j _aight_imma_head_out
+		_turn_left:
+			
+			
+			lw t0, object_dir(s2)
+			add t0, t0, 3
+			rem t0, t0, 4
+			sw t0, object_dir(s2)
+			move a0, s2
+			jal obj_draw_bug
+			j _move_it
+			
+	_aight_imma_head_out:
+	
+leave s0 s1 s2
+# ------------------------------------------------------------------------------------------------
+buggy:
 enter
 
+	li a1, BUG_MOVE_VELOCITY
+	li a2, BUG_MOVE_DURATION
+	jal obj_start_moving_forward
 leave
-
+# ------------------------------------------------------------------------------------------------
+check_front:
+enter s0
+	 #checks in front of bug for tile, or obj
+	move s0, a0
+	lw a1, object_dir(s0)
+	jal obj_collision_check
+	beq v0, 1, _return1
+	beq v0, 0, _return1
+	beq v0, -1, _return0
+	
+	_return1:
+	li v0, 1
+	j _end_front
+	_return0:
+	li v0, 0
+	
+	_end_front:
+leave s0
 # ------------------------------------------------------------------------------------------------
 # Drawing functions
 # ------------------------------------------------------------------------------------------------
@@ -276,7 +673,19 @@ leave
 # a0 = object index (but you can just access the player_ variables directly)
 obj_draw_player:
 enter
-
+	jal obj_get_topleft_pixel_coords
+	
+	move a0, v0
+	move a1, v1
+	
+	lw t0, player_dir
+	mul t0, t0, 4
+	
+	lw a2, player_textures(t0)
+	
+	jal blit_5x5_sprite_trans
+	
+	
 leave
 
 # ------------------------------------------------------------------------------------------------
@@ -284,7 +693,13 @@ leave
 # a0 = object index
 obj_draw_diamond:
 enter
-
+	jal obj_get_topleft_pixel_coords
+	move a0, v0
+	move a1, v1
+	la a2, tex_diamond
+	
+	jal blit_5x5_sprite_trans
+	
 leave
 
 # ------------------------------------------------------------------------------------------------
@@ -292,16 +707,31 @@ leave
 # a0 = object index
 obj_draw_boulder:
 enter
-
+	jal obj_get_topleft_pixel_coords
+	move a0, v0
+	move a1, v1
+	la a2, tex_boulder
+	
+	jal blit_5x5_sprite_trans
 leave
 
 # ------------------------------------------------------------------------------------------------
 
 # a0 = object index
 obj_draw_bug:
-enter
+enter s0
+move s0, a0
+	jal obj_get_topleft_pixel_coords
+	move a0, v0
+	move a1, v1
+	lw t0, object_dir(s0)
+	
+	mul t0, t0, 4
+	lw a2, bug_textures(t0)
+	
+	jal blit_5x5_sprite_trans
 
-leave
+leave s0 
 
 # ------------------------------------------------------------------------------------------------
 
@@ -325,3 +755,5 @@ enter
 
 	jal display_blit_5x5_trans
 leave
+# ------------------------------------------------------------------------------------------------
+
